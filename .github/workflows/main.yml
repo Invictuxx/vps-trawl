@@ -1,4 +1,3 @@
-```yaml
 name: Run TRAWL for 6 hours
 
 on:
@@ -65,4 +64,3 @@ jobs:
 
           echo "===== CLOUDFLARED ====="
           docker logs cloudflared --tail 500
-```
