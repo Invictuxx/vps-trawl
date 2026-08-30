@@ -9,48 +9,44 @@ jobs:
     timeout-minutes: 360
 
     steps:
-      - name: Checkout TRAWL
-        uses: actions/checkout@v4
-        with:
-          ref: dev
-
-      - name: Verify repository
+      - name: Clone TRAWL
         run: |
-          echo "Workspace: $GITHUB_WORKSPACE"
-          echo "Current directory: $(pwd)"
-          echo
-          echo "Repository files:"
+          git clone https://github.com/germondai/trawl
+          cd trawl
+
+      - name: Configure TRAWL
+        working-directory: trawl
+        run: |
+          cp .env.example .env
+
+          echo "TRAWL configuration:"
           ls -la
           echo
-          echo "Docker Compose:"
-          ls -la "$GITHUB_WORKSPACE/docker-compose.yml"
+          echo ".env created successfully"
 
-      - name: Start TRAWL
+      - name: Start scraper + Redis
+        working-directory: trawl
         run: |
-          docker compose \
-            -f "$GITHUB_WORKSPACE/docker-compose.yml" \
-            up -d
+          docker compose up -d
 
-      - name: Wait for TRAWL
+      - name: Verify TRAWL
+        working-directory: trawl
         run: |
-          echo "Waiting for TRAWL to become healthy..."
+          echo "Waiting for TRAWL..."
 
           for i in {1..60}; do
-            if curl -fsS http://127.0.0.1:8191/health; then
+            if curl -fsS http://localhost:8191/health; then
               echo
-              echo "TRAWL is ready."
+              echo "TRAWL is healthy!"
               exit 0
             fi
 
-            echo "Attempt $i/60 - TRAWL not ready yet..."
+            echo "Attempt $i/60..."
             sleep 5
           done
 
-          echo "TRAWL failed to start."
-          docker compose \
-            -f "$GITHUB_WORKSPACE/docker-compose.yml" \
-            logs
-
+          echo "TRAWL failed to become healthy."
+          docker compose logs
           exit 1
 
       - name: Start Cloudflare Tunnel
@@ -58,7 +54,7 @@ jobs:
           CLOUDFLARE_TUNNEL_TOKEN: ${{ secrets.CLOUDFLARE_TUNNEL_TOKEN }}
         run: |
           if [ -z "$CLOUDFLARE_TUNNEL_TOKEN" ]; then
-            echo "ERROR: CLOUDFLARE_TUNNEL_TOKEN secret is not configured."
+            echo "ERROR: CLOUDFLARE_TUNNEL_TOKEN is not configured."
             exit 1
           fi
 
@@ -66,47 +62,40 @@ jobs:
             --name cloudflared \
             --network host \
             cloudflare/cloudflared:latest \
-            tunnel --no-autoupdate run --token "$CLOUDFLARE_TUNNEL_TOKEN"
+            tunnel --no-autoupdate run \
+            --token "$CLOUDFLARE_TUNNEL_TOKEN"
 
       - name: Verify Cloudflare Tunnel
         run: |
           sleep 10
 
-          echo "Cloudflare Tunnel container:"
+          echo "Cloudflare Tunnel:"
           docker ps --filter name=cloudflared
 
           echo
           echo "Cloudflare Tunnel logs:"
           docker logs cloudflared --tail 100
 
-      - name: Keep TRAWL and Tunnel running
+      - name: Keep TRAWL running for 6 hours
         run: |
-          echo "========================================="
+          echo "========================================"
           echo "TRAWL is running"
-          echo "API: http://127.0.0.1:8191"
-          echo "========================================="
+          echo "http://localhost:8191"
+          echo "========================================"
           echo "Cloudflare Tunnel is running"
-          echo "========================================="
+          echo "========================================"
           echo "Keeping everything alive for 6 hours..."
-          echo "========================================="
+          echo "========================================"
 
           sleep 21600
 
-      - name: Cleanup
+      - name: Show logs
         if: always()
+        working-directory: trawl
         run: |
-          echo "===== TRAWL ====="
-
-          docker compose \
-            -f "$GITHUB_WORKSPACE/docker-compose.yml" \
-            logs --tail=500 || true
+          echo "===== TRAWL / REDIS ====="
+          docker compose logs --tail=500 || true
 
           echo
           echo "===== CLOUDFLARED ====="
-
           docker logs cloudflared --tail 500 || true
-
-          echo
-          echo "===== CONTAINERS ====="
-
-          docker ps -a || true
