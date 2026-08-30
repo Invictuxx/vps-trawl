@@ -9,58 +9,104 @@ jobs:
     timeout-minutes: 360
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
+      - name: Checkout TRAWL
+        uses: actions/checkout@v4
+        with:
+          ref: dev
+
+      - name: Verify repository
+        run: |
+          echo "Workspace: $GITHUB_WORKSPACE"
+          echo "Current directory: $(pwd)"
+          echo
+          echo "Repository files:"
+          ls -la
+          echo
+          echo "Docker Compose:"
+          ls -la "$GITHUB_WORKSPACE/docker-compose.yml"
 
       - name: Start TRAWL
         run: |
-          docker compose up -d
+          docker compose \
+            -f "$GITHUB_WORKSPACE/docker-compose.yml" \
+            up -d
 
       - name: Wait for TRAWL
         run: |
-          echo "Waiting for TRAWL..."
+          echo "Waiting for TRAWL to become healthy..."
 
           for i in {1..60}; do
-            if curl -fsS http://localhost:8191/health; then
+            if curl -fsS http://127.0.0.1:8191/health; then
               echo
               echo "TRAWL is ready."
               exit 0
             fi
 
+            echo "Attempt $i/60 - TRAWL not ready yet..."
             sleep 5
           done
 
           echo "TRAWL failed to start."
-          docker compose logs
+          docker compose \
+            -f "$GITHUB_WORKSPACE/docker-compose.yml" \
+            logs
+
           exit 1
 
       - name: Start Cloudflare Tunnel
         env:
           CLOUDFLARE_TUNNEL_TOKEN: ${{ secrets.CLOUDFLARE_TUNNEL_TOKEN }}
         run: |
+          if [ -z "$CLOUDFLARE_TUNNEL_TOKEN" ]; then
+            echo "ERROR: CLOUDFLARE_TUNNEL_TOKEN secret is not configured."
+            exit 1
+          fi
+
           docker run -d \
             --name cloudflared \
-            --restart unless-stopped \
+            --network host \
             cloudflare/cloudflared:latest \
             tunnel --no-autoupdate run --token "$CLOUDFLARE_TUNNEL_TOKEN"
 
-      - name: Check Cloudflare Tunnel
+      - name: Verify Cloudflare Tunnel
         run: |
           sleep 10
-          docker logs cloudflared --tail 50
 
-      - name: Keep services running for 6 hours
+          echo "Cloudflare Tunnel container:"
+          docker ps --filter name=cloudflared
+
+          echo
+          echo "Cloudflare Tunnel logs:"
+          docker logs cloudflared --tail 100
+
+      - name: Keep TRAWL and Tunnel running
         run: |
-          echo "TRAWL is running."
-          echo "Cloudflare Tunnel is running."
-          echo "Keeping services alive for 6 hours..."
+          echo "========================================="
+          echo "TRAWL is running"
+          echo "API: http://127.0.0.1:8191"
+          echo "========================================="
+          echo "Cloudflare Tunnel is running"
+          echo "========================================="
+          echo "Keeping everything alive for 6 hours..."
+          echo "========================================="
+
           sleep 21600
 
-      - name: Show logs
+      - name: Cleanup
         if: always()
         run: |
           echo "===== TRAWL ====="
-          docker compose logs --tail=500
 
+          docker compose \
+            -f "$GITHUB_WORKSPACE/docker-compose.yml" \
+            logs --tail=500 || true
+
+          echo
           echo "===== CLOUDFLARED ====="
-          docker logs cloudflared --tail 500
+
+          docker logs cloudflared --tail 500 || true
+
+          echo
+          echo "===== CONTAINERS ====="
+
+          docker ps -a || true
